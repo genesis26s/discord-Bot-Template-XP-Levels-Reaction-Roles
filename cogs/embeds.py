@@ -1,6 +1,7 @@
 """Interactive embed builder."""
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any, Optional
 
@@ -22,7 +23,6 @@ def _empty_data() -> dict[str, Any]:
             "thumbnail": None, "image": None}
 
 
-# ---- Modals -------------------------------------------------------------
 class BaseModal(discord.ui.Modal):
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         await interaction.response.send_message(f"❌ {error}", ephemeral=True)
@@ -52,7 +52,8 @@ class BasicModal(BaseModal):
         try:
             d["color"] = validate_color(self.color_in.value or "#5865F2")
         except ValidationError as e:
-            return await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+            return await interaction.response.send_message(
+                f"❌ {e}", ephemeral=True)
         await self.view_ref.refresh(interaction)
 
 
@@ -61,12 +62,15 @@ class AuthorModal(BaseModal):
         super().__init__(title="Embed — Author")
         self.view_ref = view
         a = view.data.get("author") or {}
-        self.name_in = discord.ui.TextInput(label="Author name", max_length=256,
-                                            required=False, default=a.get("name", ""))
-        self.icon_in = discord.ui.TextInput(label="Author icon URL", required=False,
-                                            default=a.get("icon_url") or "")
-        self.url_in = discord.ui.TextInput(label="Author link URL", required=False,
-                                           default=a.get("url") or "")
+        self.name_in = discord.ui.TextInput(
+            label="Author name", max_length=256, required=False,
+            default=a.get("name", ""))
+        self.icon_in = discord.ui.TextInput(
+            label="Author icon URL", required=False,
+            default=a.get("icon_url") or "")
+        self.url_in = discord.ui.TextInput(
+            label="Author link URL", required=False,
+            default=a.get("url") or "")
         for item in (self.name_in, self.icon_in, self.url_in):
             self.add_item(item)
 
@@ -84,10 +88,12 @@ class FooterModal(BaseModal):
         super().__init__(title="Embed — Footer")
         self.view_ref = view
         f = view.data.get("footer") or {}
-        self.text_in = discord.ui.TextInput(label="Footer text", max_length=2048,
-                                            required=False, default=f.get("text", ""))
-        self.icon_in = discord.ui.TextInput(label="Footer icon URL", required=False,
-                                            default=f.get("icon_url") or "")
+        self.text_in = discord.ui.TextInput(
+            label="Footer text", max_length=2048, required=False,
+            default=f.get("text", ""))
+        self.icon_in = discord.ui.TextInput(
+            label="Footer icon URL", required=False,
+            default=f.get("icon_url") or "")
         for item in (self.text_in, self.icon_in):
             self.add_item(item)
 
@@ -103,10 +109,12 @@ class ImagesModal(BaseModal):
     def __init__(self, view: "EmbedBuilderView"):
         super().__init__(title="Embed — Images")
         self.view_ref = view
-        self.thumb_in = discord.ui.TextInput(label="Thumbnail URL", required=False,
-                                             default=view.data.get("thumbnail") or "")
-        self.image_in = discord.ui.TextInput(label="Image URL", required=False,
-                                             default=view.data.get("image") or "")
+        self.thumb_in = discord.ui.TextInput(
+            label="Thumbnail URL", required=False,
+            default=view.data.get("thumbnail") or "")
+        self.image_in = discord.ui.TextInput(
+            label="Image URL", required=False,
+            default=view.data.get("image") or "")
         for item in (self.thumb_in, self.image_in):
             self.add_item(item)
 
@@ -121,10 +129,12 @@ class FieldModal(BaseModal):
         super().__init__(title="Embed — Add field")
         self.view_ref = view
         self.name_in = discord.ui.TextInput(label="Field name", max_length=256)
-        self.value_in = discord.ui.TextInput(label="Field value", style=discord.TextStyle.paragraph,
-                                             max_length=1024)
-        self.inline_in = discord.ui.TextInput(label="Inline? (yes/no)", max_length=3,
-                                              default="no", required=False)
+        self.value_in = discord.ui.TextInput(
+            label="Field value", style=discord.TextStyle.paragraph,
+            max_length=1024)
+        self.inline_in = discord.ui.TextInput(
+            label="Inline? (yes/no)", max_length=3,
+            default="no", required=False)
         for item in (self.name_in, self.value_in, self.inline_in):
             self.add_item(item)
 
@@ -137,7 +147,6 @@ class FieldModal(BaseModal):
         await self.view_ref.refresh(interaction)
 
 
-# ---- Builder view -------------------------------------------------------
 class EmbedBuilderView(discord.ui.View):
     def __init__(self, service: EmbedService, author_id: int, guild_id: int,
                  name: str, data: dict[str, Any]):
@@ -160,14 +169,27 @@ class EmbedBuilderView(discord.ui.View):
         try:
             embed = build_discord_embed(self.data)
         except ValidationError as e:
-            return await interaction.response.send_message(f"❌ {e}", ephemeral=True)
-        if interaction.response.is_done():
-            if self.message:
-                await self.message.edit(embed=embed, view=self)
-        else:
-            await interaction.response.edit_message(embed=embed, view=self)
+            return await interaction.response.send_message(
+                f"❌ {e}", ephemeral=True)
 
-    # --- buttons ---
+        # Always edit the stored message; acknowledge the interaction so it
+        # never dangles (fixes silent failures when self.message is missing).
+        if self.message:
+            try:
+                await self.message.edit(embed=embed, view=self)
+            except discord.HTTPException:
+                pass
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.defer()
+                except discord.HTTPException:
+                    pass
+        else:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "Preview message is gone — please restart the builder.",
+                    ephemeral=True)
+
     @discord.ui.button(label="Basic", style=discord.ButtonStyle.primary, row=0)
     async def edit_basic(self, interaction, _):
         await interaction.response.send_modal(BasicModal(self))
@@ -204,9 +226,11 @@ class EmbedBuilderView(discord.ui.View):
     @discord.ui.button(label="Save", style=discord.ButtonStyle.success, row=2)
     async def save(self, interaction, _):
         try:
-            await self.service.save(self.guild_id, self.name, self.author_id, self.data)
+            await self.service.save(
+                self.guild_id, self.name, self.author_id, self.data)
         except ValidationError as e:
-            return await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+            return await interaction.response.send_message(
+                f"❌ {e}", ephemeral=True)
         await interaction.response.send_message(
             f"✅ Saved embed **{self.name}**.", ephemeral=True)
         self.stop()
@@ -217,11 +241,11 @@ class EmbedBuilderView(discord.ui.View):
         self.stop()
 
 
-# ---- Cog ----------------------------------------------------------------
 class Embeds(commands.Cog):
     """Interactive embed builder."""
 
-    embed = app_commands.Group(name="embed", description="Saved embed management.")
+    embed = app_commands.Group(name="embed",
+                                description="Saved embed management.")
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -232,18 +256,19 @@ class Embeds(commands.Cog):
     @app_commands.describe(name="Unique name for this embed")
     async def create(self, interaction: discord.Interaction, name: str):
         assert interaction.guild
-        existing = await self.service.get(interaction.guild.id, name)
-        if existing:
+        if await self.service.get(interaction.guild.id, name):
             return await interaction.response.send_message(
-                f"Embed **{name}** already exists — use `/embed edit`.", ephemeral=True)
+                f"Embed **{name}** already exists — use `/embed edit`.",
+                ephemeral=True)
         view = EmbedBuilderView(self.service, interaction.user.id,
-                                interaction.guild.id, name, _empty_data())
+                                 interaction.guild.id, name, _empty_data())
         try:
             embed = build_discord_embed(view.data)
         except ValidationError:
-            embed = discord.Embed(title="Builder", description="Starting…",
-                                  color=0x5865F2)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            embed = discord.Embed(title="Builder",
+                                   description="Starting…", color=0x5865F2)
+        await interaction.response.send_message(
+            embed=embed, view=view, ephemeral=True)
         view.message = await interaction.original_response()
 
     @embed.command(name="edit", description="Edit a saved embed.")
@@ -256,32 +281,46 @@ class Embeds(commands.Cog):
             return await interaction.response.send_message(
                 f"No embed named **{name}**.", ephemeral=True)
         view = EmbedBuilderView(self.service, interaction.user.id,
-                                interaction.guild.id, name, row["data"])
-        embed = build_discord_embed(view.data)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+                                 interaction.guild.id, name, row["data"])
+        try:
+            embed = build_discord_embed(view.data)
+        except ValidationError as e:
+            return await interaction.response.send_message(
+                f"❌ Stored embed is invalid: {e}", ephemeral=True)
+        await interaction.response.send_message(
+            embed=embed, view=view, ephemeral=True)
         view.message = await interaction.original_response()
 
     @embed.command(name="preview", description="Preview a saved embed.")
     @require_admin()
-    @app_commands.describe(name="Name of saved embed")
     async def preview(self, interaction: discord.Interaction, name: str):
         assert interaction.guild
         row = await self.service.get(interaction.guild.id, name)
         if not row:
-            return await interaction.response.send_message("Not found.", ephemeral=True)
-        embed = build_discord_embed(row["data"])
+            return await interaction.response.send_message(
+                "Not found.", ephemeral=True)
+        try:
+            embed = build_discord_embed(row["data"])
+        except ValidationError as e:
+            return await interaction.response.send_message(
+                f"❌ {e}", ephemeral=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @embed.command(name="send", description="Send a saved embed to a channel.")
+    @embed.command(name="send",
+                    description="Send a saved embed to a channel.")
     @require_admin()
-    @app_commands.describe(name="Name of saved embed", channel="Target channel")
     async def send(self, interaction: discord.Interaction, name: str,
-                   channel: discord.TextChannel):
+                    channel: discord.TextChannel):
         assert interaction.guild
         row = await self.service.get(interaction.guild.id, name)
         if not row:
-            return await interaction.response.send_message("Not found.", ephemeral=True)
-        embed = build_discord_embed(row["data"])
+            return await interaction.response.send_message(
+                "Not found.", ephemeral=True)
+        try:
+            embed = build_discord_embed(row["data"])
+        except ValidationError as e:
+            return await interaction.response.send_message(
+                f"❌ {e}", ephemeral=True)
         try:
             await channel.send(embed=embed)
         except discord.HTTPException as e:
@@ -296,41 +335,45 @@ class Embeds(commands.Cog):
         assert interaction.guild
         rows = await self.service.list(interaction.guild.id)
         if not rows:
-            return await interaction.response.send_message("No embeds saved.",
-                                                           ephemeral=True)
+            return await interaction.response.send_message(
+                "No embeds saved.", ephemeral=True)
         lines = [f"• **{r['name']}** — <@{r['author_id']}>" for r in rows]
         embed = discord.Embed(title="📚 Saved embeds", color=0x5865F2,
-                              description="\n".join(lines))
+                                description="\n".join(lines))
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @embed.command(name="delete", description="Delete a saved embed.")
     @require_admin()
-    @app_commands.describe(name="Name of saved embed")
     async def delete(self, interaction: discord.Interaction, name: str):
         assert interaction.guild
         row = await self.service.get(interaction.guild.id, name)
         if not row:
-            return await interaction.response.send_message("Not found.", ephemeral=True)
-        # Only the author or an administrator may delete
-        if row["author_id"] != interaction.user.id and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message(
+                "Not found.", ephemeral=True)
+        if (row["author_id"] != interaction.user.id
+                and not interaction.user.guild_permissions.administrator):
             return await interaction.response.send_message(
                 "Only the embed's author or a server admin can delete this.",
                 ephemeral=True)
         await self.service.delete(interaction.guild.id, name)
-        await interaction.response.send_message(f"Deleted **{name}**.", ephemeral=True)
+        await interaction.response.send_message(
+            f"Deleted **{name}**.", ephemeral=True)
 
-    @embed.command(name="template", description="Start from a predefined template.")
+    @embed.command(name="template",
+                    description="Start from a predefined template.")
     @require_admin()
-    @app_commands.describe(template="Template name", name="Save-as name")
-    @app_commands.choices(template=[app_commands.Choice(name=k, value=k) for k in TEMPLATES])
-    async def template(self, interaction: discord.Interaction, template: str, name: str):
+    @app_commands.choices(template=[
+        app_commands.Choice(name=k, value=k) for k in TEMPLATES
+    ])
+    async def template(self, interaction: discord.Interaction,
+                        template: str, name: str):
         assert interaction.guild
         if template not in TEMPLATES:
-            return await interaction.response.send_message("Unknown template.",
-                                                           ephemeral=True)
-        data = dict(TEMPLATES[template])
+            return await interaction.response.send_message(
+                "Unknown template.", ephemeral=True)
+        data = copy.deepcopy(TEMPLATES[template])
         view = EmbedBuilderView(self.service, interaction.user.id,
-                                interaction.guild.id, name, data)
+                                 interaction.guild.id, name, data)
         embed = build_discord_embed(data)
         await interaction.response.send_message(
             content=f"Using template `{template}` — save when ready.",
