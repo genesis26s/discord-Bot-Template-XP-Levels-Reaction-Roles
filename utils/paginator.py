@@ -1,17 +1,21 @@
 """Reusable pagination view."""
 from __future__ import annotations
 
+from typing import Optional
+
 import discord
 
 
 class Paginator(discord.ui.View):
-    def __init__(self, pages: list[discord.Embed], author_id: int, timeout: float = 180.0):
+    def __init__(self, pages: list[discord.Embed], author_id: int,
+                 timeout: float = 180.0):
         super().__init__(timeout=timeout)
         if not pages:
             raise ValueError("Paginator requires at least one page.")
         self.pages = pages
         self.author_id = author_id
         self.index = 0
+        self.message: Optional[discord.Message] = None
         self._refresh()
 
     def _refresh(self) -> None:
@@ -50,3 +54,8 @@ class Paginator(discord.ui.View):
     async def on_timeout(self) -> None:
         for child in self.children:
             child.disabled = True  # type: ignore[attr-defined]
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
