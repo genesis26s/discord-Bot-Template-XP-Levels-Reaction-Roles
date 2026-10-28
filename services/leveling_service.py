@@ -10,7 +10,6 @@ from database import Database
 
 
 def total_xp_for_level(level: int) -> int:
-    """Total XP required to reach `level` from 0."""
     if level <= 0:
         return 0
     return 5 * level * level + 55 * level
@@ -19,7 +18,6 @@ def total_xp_for_level(level: int) -> int:
 def level_for_xp(xp: int) -> int:
     if xp <= 0:
         return 0
-    # 5L^2 + 55L - xp <= 0  →  L = floor((-55 + sqrt(55^2 + 20xp)) / 10)
     disc = 55 * 55 + 20 * xp
     level = int((-55 + math.sqrt(disc)) / 10)
     while total_xp_for_level(level + 1) <= xp:
@@ -158,7 +156,7 @@ class LevelingService:
             (xp, max(0, level), guild_id, user_id),
         )
 
-    # ---- XP award logic ------------------------------------------------
+    # ---- XP award logic (race-safe) -----------------------------------
     async def try_award_xp(
         self,
         guild_id: int,
@@ -168,8 +166,8 @@ class LevelingService:
         *,
         now: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
-        """Return award info if XP was granted, else None."""
         now = now if now is not None else int(time.time())
+
         config = await self.get_guild_config(guild_id)
         if not config.get("leveling_enabled"):
             return None
@@ -189,20 +187,48 @@ class LevelingService:
             ):
                 return None
 
-        user = await self.ensure_user(guild_id, user_id)
-        if now - int(user.get("last_xp_at") or 0) < int(config["xp_cooldown"]):
+        await self.ensure_user(guild_id, user_id)
+
+        user = await self.db.fetchone(
+            "SELECT xp, level, last_xp_at FROM user_levels "
+            "WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id),
+        )
+        if not user:
+            return None
+
+        cooldown = int(config["xp_cooldown"])
+        if now - int(user["last_xp_at"]) < cooldown:
             return None
 
         gain = self.rng.randint(int(config["xp_min"]), int(config["xp_max"]))
-        old_level = int(user["level"])
-        new_xp = int(user["xp"]) + gain
+
+        # Atomic: only succeed if cooldown is still expired at write time.
+        # Two coroutines racing → exactly one rowcount=1, the other 0.
+        updated = await self.db.execute_rowcount(
+            "UPDATE user_levels "
+            "SET xp = xp + ?, total_messages = total_messages + 1, last_xp_at = ? "
+            "WHERE guild_id = ? AND user_id = ? AND last_xp_at <= ?",
+            (gain, now, guild_id, user_id, now - cooldown),
+        )
+        if updated == 0:
+            return None
+
+        # Re-read to compute level from actual xp (avoids stale optimistic value).
+        fresh = await self.db.fetchone(
+            "SELECT xp, level FROM user_levels WHERE guild_id=? AND user_id=?",
+            (guild_id, user_id),
+        )
+        new_xp = int(fresh["xp"])
+        old_level = int(fresh["level"])
         new_level = level_for_xp(new_xp)
 
-        await self.db.execute(
-            "UPDATE user_levels SET xp=?, level=?, total_messages=total_messages+1, "
-            "last_xp_at=? WHERE guild_id=? AND user_id=?",
-            (new_xp, new_level, now, guild_id, user_id),
-        )
+        if new_level != old_level:
+            await self.db.execute(
+                "UPDATE user_levels SET level=? WHERE guild_id=? AND user_id=?",
+                (new_level, guild_id, user_id),
+            )
+
         return {
             "xp_gain": gain,
             "new_xp": new_xp,
