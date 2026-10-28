@@ -31,8 +31,21 @@ def validate_url(url: str | None) -> str | None:
     return url
 
 
+def validate_emoji(emoji: str) -> str:
+    """Accept a Unicode emoji, custom <:name:id>, or <a:name:id>."""
+    import discord  # local import so this module stays discord-free otherwise
+    if not emoji or not emoji.strip():
+        raise ValidationError("Emoji cannot be empty.")
+    try:
+        partial = discord.PartialEmoji.from_str(emoji.strip())
+    except Exception:
+        raise ValidationError(f"`{emoji}` is not a valid emoji.")
+    if partial.id is None and partial.name is None:
+        raise ValidationError(f"`{emoji}` is not a valid emoji.")
+    return str(partial)
+
+
 def clamp(text: str | None, limit: int) -> str:
-    """Trim text to Discord's field length limits."""
     if not text:
         return ""
     if len(text) <= limit:
