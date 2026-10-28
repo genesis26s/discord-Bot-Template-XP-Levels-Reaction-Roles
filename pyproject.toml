@@ -1,0 +1,29 @@
+[project]
+name = "discord-bot-template"
+version = "1.0.0"
+description = "Professional modular Discord bot template"
+requires-python = ">=3.11"
+dependencies = [
+    "discord.py>=2.3.0,<3.0.0",
+    "aiosqlite>=0.19.0",
+    "python-dotenv>=1.0.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"[project]
+name = "discord-bot-template"
+version = "1.0.0"
+description = "Professional modular Discord bot template"
+requires-python = ">=3.11"
+dependencies = [
+    "discord.py>=2.3.0,<3.0.0",
+    "aiosqlite>=0.19.0",
+    "python-dotenv>=1.0.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
