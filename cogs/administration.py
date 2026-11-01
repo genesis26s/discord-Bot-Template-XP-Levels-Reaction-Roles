@@ -18,7 +18,6 @@ from utils.permissions import require_admin
 log = logging.getLogger(__name__)
 
 
-# Fields that are coerced into ints during import; (lo, hi) bounds.
 INT_FIELDS: dict[str, tuple[int, int]] = {
     "xp_min": (1, 1000),
     "xp_max": (1, 1000),
@@ -134,6 +133,11 @@ class Administration(commands.Cog):
         if file.size > 512 * 1024:
             return await interaction.response.send_message(
                 "File too large (max 512 KiB).", ephemeral=True)
+        allowed_types = {"application/json", "text/plain",
+                          "application/octet-stream"}
+        if file.content_type not in allowed_types:
+            return await interaction.response.send_message(
+                f"❌ Expected JSON, got `{file.content_type}`.", ephemeral=True)
         try:
             data = json.loads(await file.read())
         except Exception as e:
@@ -144,81 +148,3 @@ class Administration(commands.Cog):
 
         # --- validate before any write ---
         try:
-            raw_cfg = data.get("guild_config") or {}
-            clean_cfg: dict = {}
-            for key, (lo, hi) in INT_FIELDS.items():
-                if raw_cfg.get(key) is not None:
-                    clean_cfg[key] = _coerce_int(raw_cfg[key], lo, hi, key)
-            if raw_cfg.get("announce_mode") in ("channel", "current"):
-                clean_cfg["announce_mode"] = raw_cfg["announce_mode"]
-            if clean_cfg.get("xp_min") and clean_cfg.get("xp_max") \
-                    and clean_cfg["xp_min"] > clean_cfg["xp_max"]:
-                raise ValueError("xp_min must be <= xp_max")
-
-            channels = [int(c) for c in (data.get("ignored_channels") or [])]
-            roles = [int(r) for r in (data.get("ignored_roles") or [])]
-            rewards: list[tuple[int, int]] = []
-            for r in data.get("level_rewards") or []:
-                lvl = _coerce_int(r.get("level"), 1, 1000, "level")
-                rid = _coerce_int(r.get("role_id"), 1, 2**63 - 1, "role_id")
-                rewards.append((lvl, rid))
-        except (ValueError, TypeError) as e:
-            return await interaction.response.send_message(
-                f"❌ Validation failed: {e}", ephemeral=True)
-
-        # --- single transaction so a mid-import failure rolls back ---
-        try:
-            async with self.bot.db.transaction() as conn:
-                await conn.execute(
-                    "INSERT OR IGNORE INTO guild_config (guild_id) VALUES (?)",
-                    (gid,),
-                )
-                if clean_cfg:
-                    assignments = ", ".join(f"{k}=?" for k in clean_cfg)
-                    await conn.execute(
-                        f"UPDATE guild_config SET {assignments}, "
-                        f"updated_at=strftime('%s','now') WHERE guild_id=?",
-                        (*clean_cfg.values(), gid),
-                    )
-                for ch in channels:
-                    await conn.execute(
-                        "INSERT OR IGNORE INTO ignored_channels "
-                        "(guild_id, channel_id) VALUES (?,?)",
-                        (gid, ch),
-                    )
-                for rl in roles:
-                    await conn.execute(
-                        "INSERT OR IGNORE INTO ignored_roles "
-                        "(guild_id, role_id) VALUES (?,?)",
-                        (gid, rl),
-                    )
-                for lvl, rid in rewards:
-                    await conn.execute(
-                        "INSERT OR IGNORE INTO level_rewards "
-                        "(guild_id, level, role_id) VALUES (?,?,?)",
-                        (gid, lvl, rid),
-                    )
-        except Exception as e:
-            log.exception("Config import transaction failed")
-            return await interaction.response.send_message(
-                f"❌ Import rolled back: {e}", ephemeral=True)
-
-        # Embeds have their own validator; do them one by one outside the tx.
-        imported_embeds = 0
-        for e in data.get("saved_embeds") or []:
-            try:
-                await self.embeds.save(
-                    gid, e["name"], interaction.user.id, e["data"])
-                imported_embeds += 1
-            except (ValidationError, KeyError, TypeError):
-                continue
-
-        await interaction.response.send_message(
-            f"✅ Configuration imported "
-            f"(embeds: {imported_embeds}/{len(data.get('saved_embeds') or [])}).",
-            ephemeral=True,
-        )
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(Administration(bot))
