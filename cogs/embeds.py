@@ -25,7 +25,10 @@ def _empty_data() -> dict[str, Any]:
 
 class BaseModal(discord.ui.Modal):
     async def on_error(self, interaction: discord.Interaction, error: Exception):
-        await interaction.response.send_message(f"❌ {error}", ephemeral=True)
+        try:
+            await interaction.response.send_message(f"❌ {error}", ephemeral=True)
+        except discord.HTTPException:
+            pass
 
 
 class BasicModal(BaseModal):
@@ -172,8 +175,6 @@ class EmbedBuilderView(discord.ui.View):
             return await interaction.response.send_message(
                 f"❌ {e}", ephemeral=True)
 
-        # Always edit the stored message; acknowledge the interaction so it
-        # never dangles (fixes silent failures when self.message is missing).
         if self.message:
             try:
                 await self.message.edit(embed=embed, view=self)
