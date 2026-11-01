@@ -8,7 +8,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from services.leveling_service import LevelingService, total_xp_for_level
+from services.leveling_service import (
+    LevelingService, level_for_xp, total_xp_for_level,
+)
 from utils.permissions import require_admin
 from utils.paginator import Paginator
 from utils.validators import validate_positive_int
@@ -21,6 +23,34 @@ def progress_bar(current: int, total: int, length: int = 20) -> str:
         return "▰" * length
     filled = max(0, min(length, int(length * current / total)))
     return "▰" * filled + "▱" * (length - filled)
+
+
+class _ResetConfirm(discord.ui.View):
+    def __init__(self, service: LevelingService, guild_id: int,
+                 member: discord.Member, author_id: int):
+        super().__init__(timeout=30)
+        self.service = service
+        self.guild_id = guild_id
+        self.member = member
+        self.author_id = author_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.author_id
+
+    @discord.ui.button(label="Confirm reset",
+                       style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, _):
+        await self.service.reset_user(self.guild_id, self.member.id)
+        self.stop()
+        await interaction.response.edit_message(
+            content=f"✅ Reset **{self.member.display_name}**'s XP and level.",
+            view=None,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, _):
+        self.stop()
+        await interaction.response.edit_message(content="Cancelled.", view=None)
 
 
 class Leveling(commands.Cog):
@@ -86,7 +116,8 @@ class Leveling(commands.Cog):
                 log.warning("Failed to add reward role %s", role_id)
 
     # ---- /rank -------------------------------------------------------
-    @app_commands.command(name="rank", description="Show a user's level and rank.")
+    @app_commands.command(name="rank",
+                           description="Show a user's level and rank.")
     @app_commands.describe(member="Member to inspect (defaults to you).")
     async def rank(self, interaction: discord.Interaction,
                    member: discord.Member | None = None):
@@ -155,8 +186,10 @@ class Leveling(commands.Cog):
         rewards = await self.service.list_rewards(interaction.guild.id)
 
         embed = discord.Embed(title="⚙️ Leveling Configuration", color=0x5865F2)
-        embed.add_field(name="Enabled", value="✅" if cfg["leveling_enabled"] else "❌")
-        embed.add_field(name="XP range", value=f"{cfg['xp_min']}–{cfg['xp_max']}")
+        embed.add_field(name="Enabled",
+                         value="✅" if cfg["leveling_enabled"] else "❌")
+        embed.add_field(name="XP range",
+                         value=f"{cfg['xp_min']}–{cfg['xp_max']}")
         embed.add_field(name="Cooldown", value=f"{cfg['xp_cooldown']}s")
         embed.add_field(name="Announce channel",
                          value=f"<#{cfg['leveling_channel_id']}>"
@@ -174,7 +207,8 @@ class Leveling(commands.Cog):
         embed.add_field(name="Role rewards", value=reward_str, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @leveling.command(name="toggle", description="Enable or disable leveling.")
+    @leveling.command(name="toggle",
+                       description="Enable or disable leveling.")
     @require_admin()
     async def toggle(self, interaction: discord.Interaction):
         assert interaction.guild
@@ -236,9 +270,12 @@ class Leveling(commands.Cog):
     async def reset(self, interaction: discord.Interaction,
                      member: discord.Member):
         assert interaction.guild
-        await self.service.reset_user(interaction.guild.id, member.id)
         await interaction.response.send_message(
-            f"Reset **{member.display_name}**'s XP and level.", ephemeral=True)
+            f"Reset **{member.display_name}**'s XP and level?",
+            view=_ResetConfirm(self.service, interaction.guild.id, member,
+                                interaction.user.id),
+            ephemeral=True,
+        )
 
     @leveling.command(name="ignore-channel",
                        description="Toggle channel from XP rewards.")
@@ -318,6 +355,100 @@ class Leveling(commands.Cog):
         await interaction.response.send_message(
             f"Set **{member.display_name}** to **Level {level}** "
             f"({total_xp_for_level(level):,} XP).", ephemeral=True)
+
+    # ---- Backfill / preview / curve rebuild -------------------------
+    @leveling.command(
+        name="sync-rewards",
+        description="Backfill role rewards for members already past a level.",
+    )
+    @require_admin()
+    async def sync_rewards(self, interaction: discord.Interaction):
+        """Iterate every member and grant missing reward roles. Slow on large guilds."""
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+        rewards = await self.service.list_rewards(interaction.guild.id)
+        if not rewards:
+            return await interaction.followup.send(
+                "No rewards configured — add some with "
+                "`/leveling rewards action:add`.", ephemeral=True)
+        me = interaction.guild.me
+        granted = 0
+        skipped = 0
+        for member in interaction.guild.members:
+            if member.bot:
+                continue
+            user = await self.service.ensure_user(
+                interaction.guild.id, member.id)
+            level = int(user["level"])
+            for reward in rewards:
+                if int(reward["level"]) > level:
+                    continue
+                role = interaction.guild.get_role(int(reward["role_id"]))
+                if role is None or me is None:
+                    continue
+                if role >= me.top_role or not me.guild_permissions.manage_roles:
+                    skipped += 1
+                    continue
+                if role in member.roles:
+                    continue
+                try:
+                    await member.add_roles(role, reason="Reward backfill")
+                    granted += 1
+                except discord.HTTPException:
+                    skipped += 1
+        await interaction.followup.send(
+            f"✅ Backfill complete — granted **{granted}** role(s), "
+            f"skipped **{skipped}** (hierarchy/permission failures).",
+            ephemeral=True,
+        )
+
+    @leveling.command(
+        name="xp-table",
+        description="Show XP required for levels up to a target.",
+    )
+    @require_admin()
+    async def xp_table(self, interaction: discord.Interaction,
+                        max_level: int = 20):
+        validate_positive_int(max_level, 1, 100, "max_level")
+        lines = []
+        for lvl in range(1, max_level + 1):
+            total = total_xp_for_level(lvl)
+            prev = total_xp_for_level(lvl - 1)
+            lines.append(
+                f"**Lvl {lvl:>2}** — {total:>7,} XP total "
+                f"*({total - prev:,} this level)*"
+            )
+        embed = discord.Embed(
+            title=f"📊 XP Requirements (1–{max_level})",
+            description="\n".join(lines),
+            color=0x5865F2,
+        )
+        embed.set_footer(text="Adjust with /leveling set-xp")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @leveling.command(
+        name="rebuild-levels",
+        description="Recompute every user's level from XP (run once after curve change).",
+    )
+    @require_admin()
+    async def rebuild_levels(self, interaction: discord.Interaction):
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+        rows = await self.bot.db.fetchall(
+            "SELECT user_id, xp, level FROM user_levels WHERE guild_id=?",
+            (interaction.guild.id,),
+        )
+        changed = 0
+        for row in rows:
+            new_lvl = level_for_xp(int(row["xp"]))
+            if new_lvl != int(row["level"]):
+                await self.bot.db.execute(
+                    "UPDATE user_levels SET level=? WHERE guild_id=? AND user_id=?",
+                    (new_lvl, interaction.guild.id, row["user_id"]),
+                )
+                changed += 1
+        await interaction.followup.send(
+            f"✅ Rebuilt {changed}/{len(rows)} user levels.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
