@@ -29,7 +29,8 @@ class General(commands.Cog):
         self.bot = bot
         self._start = time.time()
 
-    @app_commands.command(name="ping", description="Check latency and API status.")
+    @app_commands.command(name="ping",
+                           description="Check latency and API status.")
     async def ping(self, interaction: discord.Interaction):
         ws = self.bot.latency * 1000
         t0 = time.perf_counter()
@@ -40,7 +41,8 @@ class General(commands.Cog):
         embed.add_field(name="Round trip", value=f"`{rtt:.0f} ms`")
         await interaction.edit_original_response(content=None, embed=embed)
 
-    @app_commands.command(name="help", description="Interactive command directory.")
+    @app_commands.command(name="help",
+                           description="Interactive command directory.")
     async def help(self, interaction: discord.Interaction):
         pages: list[discord.Embed] = []
         for cog_name in sorted(self.bot.cogs):
@@ -110,7 +112,8 @@ class General(commands.Cog):
         embed.add_field(name="Roles", value=str(len(g.roles)))
         embed.add_field(name="Created",
                          value=f"<t:{int(g.created_at.timestamp())}:D>")
-        embed.add_field(name="Boosts", value=str(g.premium_subscription_count or 0))
+        embed.add_field(name="Boosts",
+                         value=str(g.premium_subscription_count or 0))
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="userinfo", description="Member details.")
