@@ -1,4 +1,4 @@
-"""Reaction-role persistence and panel building."""
+"""Reaction-role persistence, panel building, and persistent views."""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -70,7 +70,7 @@ class ReactionRoleDropdownView(discord.ui.View):
         actual_max = len(options) if max_sel == 0 else min(max_sel, len(options))
         select = discord.ui.Select(
             placeholder="Select your roles...",
-            min_values=0,   # allow deselecting everything (empty submission)
+            min_values=0,
             max_values=actual_max,
             options=options,
             custom_id=f"rrsel:{panel['id']}",
@@ -83,7 +83,7 @@ class ReactionRoleDropdownView(discord.ui.View):
 
 
 # =====================================================================
-# Module-level interaction handlers (used by the views).
+# Module-level handlers.
 # =====================================================================
 async def _toggle_role(interaction: discord.Interaction, role_id: int):
     guild = interaction.guild
@@ -117,13 +117,15 @@ async def _apply_select(interaction: discord.Interaction, panel: dict):
 
     selected = {int(v) for v in (interaction.data or {}).get("values", [])}
 
-    # Get this panel's mappings from the interaction's parent (the service
-    # caller is responsible for keeping the DB in sync; here we just diff
-    # against the panel's configured roles stored on the view).
-    # The view stashes the panel; we look up mappings via the panel id.
-    db_mappings = await _fetch_mappings(interaction, panel["id"])
+    db = getattr(interaction.client, "db", None)
+    if db is None:
+        return await interaction.response.send_message(
+            "Database unavailable.", ephemeral=True)
+    db_mappings = await db.fetchall(
+        "SELECT * FROM reaction_role_mappings WHERE panel_id=? ORDER BY id ASC",
+        (panel["id"],),
+    )
     panel_role_ids = {int(m["role_id"]) for m in db_mappings}
-
     current = {r.id for r in member.roles}
 
     to_add: list[discord.Role] = []
@@ -157,18 +159,6 @@ async def _apply_select(interaction: discord.Interaction, panel: dict):
         parts.append("Removed: " + ", ".join(r.mention for r in to_remove))
     await interaction.followup.send(" | ".join(parts) or "No changes.",
                                     ephemeral=True)
-
-
-async def _fetch_mappings(interaction: discord.Interaction, panel_id: int) -> list[dict]:
-    # Reuse whatever DB is attached to the bot — no global state.
-    bot = interaction.client
-    db = getattr(bot, "db", None)
-    if db is None:
-        return []
-    return await db.fetchall(
-        "SELECT * FROM reaction_role_mappings WHERE panel_id=? ORDER BY id ASC",
-        (panel_id,),
-    )
 
 
 # =====================================================================
