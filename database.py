@@ -100,7 +100,14 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 
 class Database:
-    """Serialised async SQLite wrapper."""
+    """Serialised async SQLite wrapper.
+
+    Write methods (`execute`, `execute_rowcount`, `executemany`) acquire
+    `_write_lock` so writes never interleave. `transaction()` also holds
+    the lock for the duration of the block — do NOT call `db.execute()`
+    from inside a `transaction()` block; use the yielded connection
+    directly (`await conn.execute(...)`) to avoid deadlock.
+    """
 
     def __init__(self, path: str):
         self.path = path
@@ -112,15 +119,14 @@ class Database:
         self._conn = await aiosqlite.connect(self.path)
         self._conn.row_factory = aiosqlite.Row
 
-        # Set pragmas OUTSIDE of executescript — see SQLite docs; inside a
-        # transaction they are silently ignored, which disables foreign_keys.
+        # Pragmas MUST be set outside executescript — inside a transaction
+        # they're silently ignored, disabling FK enforcement.
         await self._conn.execute("PRAGMA foreign_keys = ON")
         await self._conn.execute("PRAGMA journal_mode = WAL")
         await self._conn.execute("PRAGMA synchronous = NORMAL")
         await self._conn.executescript(SCHEMA)
         await self._conn.commit()
 
-        # Verify FK enforcement actually took effect.
         rows = await self._conn.execute_fetchall("PRAGMA foreign_keys")
         if not rows or rows[0][0] != 1:
             raise RuntimeError(
@@ -156,7 +162,7 @@ class Database:
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[aiosqlite.Connection]:
-        """All-or-nothing write block. Inside, use the raw connection."""
+        """All-or-nothing write block. Use the yielded connection directly."""
         assert self._conn is not None
         async with self._write_lock:
             await self._conn.execute("BEGIN")
