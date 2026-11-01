@@ -156,7 +156,7 @@ class LevelingService:
             (xp, max(0, level), guild_id, user_id),
         )
 
-    # ---- XP award logic (race-safe) -----------------------------------
+    # ---- XP award (race-safe) -----------------------------------------
     async def try_award_xp(
         self,
         guild_id: int,
@@ -203,8 +203,7 @@ class LevelingService:
 
         gain = self.rng.randint(int(config["xp_min"]), int(config["xp_max"]))
 
-        # Atomic: only succeed if cooldown is still expired at write time.
-        # Two coroutines racing → exactly one rowcount=1, the other 0.
+        # Atomic write: only the winning coroutine sees rowcount == 1.
         updated = await self.db.execute_rowcount(
             "UPDATE user_levels "
             "SET xp = xp + ?, total_messages = total_messages + 1, last_xp_at = ? "
@@ -214,7 +213,6 @@ class LevelingService:
         if updated == 0:
             return None
 
-        # Re-read to compute level from actual xp (avoids stale optimistic value).
         fresh = await self.db.fetchone(
             "SELECT xp, level FROM user_levels WHERE guild_id=? AND user_id=?",
             (guild_id, user_id),
