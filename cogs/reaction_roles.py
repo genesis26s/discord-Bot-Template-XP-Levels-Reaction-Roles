@@ -48,7 +48,8 @@ class ReactionRoles(commands.Cog):
             try:
                 await self._register_panel_view(panel)
             except Exception:
-                log.exception("Failed to register view for panel %s", panel.get("id"))
+                log.exception("Failed to register view for panel %s",
+                              panel.get("id"))
 
     async def _register_panel_view(self, panel: dict) -> None:
         mappings = await self.service.mappings(panel["id"])
@@ -115,9 +116,9 @@ class ReactionRoles(commands.Cog):
     @rr.command(name="create", description="Create a reaction-role panel.")
     @require_admin()
     @app_commands.describe(name="Panel name", channel="Channel to post in",
-                           mode="react/buttons/dropdown",
-                           description="Optional description",
-                           max_selections="Dropdown maximum (0 = unlimited)")
+                            mode="react / buttons / dropdown",
+                            description="Optional description",
+                            max_selections="Dropdown maximum (0 = unlimited)")
     @app_commands.choices(mode=[app_commands.Choice(name=m, value=m)
                                  for m in ("react", "buttons", "dropdown")])
     async def create(self, interaction: discord.Interaction, name: str,
@@ -244,7 +245,8 @@ class ReactionRoles(commands.Cog):
             await interaction.followup.send(
                 "❌ Failed to refresh panel.", ephemeral=True)
 
-    @rr.command(name="setup", description="Show reaction-role configuration summary.")
+    @rr.command(name="setup",
+                 description="Show reaction-role configuration summary.")
     @require_admin()
     async def setup_cmd(self, interaction: discord.Interaction):
         assert interaction.guild
@@ -273,7 +275,12 @@ class ReactionRoles(commands.Cog):
         if not guild:
             return
         member = guild.get_member(payload.user_id)
-        if not member or member.bot:
+        if member is None:
+            try:
+                member = await guild.fetch_member(payload.user_id)
+            except discord.HTTPException:
+                return
+        if member.bot:
             return
 
         panels = await self.service.list_panels(payload.guild_id)
