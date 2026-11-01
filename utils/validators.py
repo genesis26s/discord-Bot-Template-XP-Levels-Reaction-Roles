@@ -32,8 +32,8 @@ def validate_url(url: str | None) -> str | None:
 
 
 def validate_emoji(emoji: str) -> str:
-    """Accept a Unicode emoji, custom <:name:id>, or <a:name:id>."""
-    import discord  # local import so this module stays discord-free otherwise
+    """Accept a Unicode emoji, custom <:name:id>, or animated <a:name:id>."""
+    import discord  # local import so the module stays discord-free otherwise
     if not emoji or not emoji.strip():
         raise ValidationError("Emoji cannot be empty.")
     try:
